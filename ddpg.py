@@ -10,12 +10,12 @@ class OUActionNoise():
 		self.theta = theta
 		self.mu = mu
 		self.sigma = sigma
-		self.dt = dt
+		self.delta = delta
 		self.x0 = x0
 		self.reset()
 
 	def __call__(self):
-		x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size = self.mu.shape)
+		x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.delta + self.sigma * np.sqrt(self.delta) * np.random.normal(size = self.mu.shape)
 		self.x_prev = x 
 
 		return x
@@ -46,7 +46,7 @@ class ReplayBuffer():
 		max_mem = min(self.memory_counter, self.memory_size)
 		batch = np.random.choice(max_mem, batch_size)
 
-		states = self.state_memoryp[batch]
+		states = self.state_memory[batch]
 		actions = self.action_memory[batch]
 		rewards = self.reward_memory[batch]
 		terminal_states = self.terminal_state[batch]
@@ -55,33 +55,33 @@ class ReplayBuffer():
 		return states, actions, rewards, terminal_states, new_states
 
 class CriticNetwork(nn.Module):
-	def __init__(self, beta, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir = 'tmp/ddpg'):
+	def __init__(self, beta, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir = 'CheckPoint'):
 		super(CriticNetwork, self).__init__()
 		self.input_dims = input_dims
 		self.n_actions = n_actions
-		self.checkpoint_file = os.path.join(chkpt_dir, name +"_ddpg")
+		self.checkpoint_file = os.path.join(os.getcwd(), chkpt_dir, name +"_ddpg")
 
 		self.fc1 = nn.Linear(*self.input_dims , fc1_dims)
 		f1 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
 		T.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
 		T.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
 
-		self.bn1 = nn.LayerNorm(self.fc1_dims)
+		self.bn1 = nn.LayerNorm(fc1_dims)
 
 		self.fc2 = nn.Linear(fc1_dims, fc2_dims)
 		f2 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
 		T.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
 		T.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
 
-		self.bn2 = nn.LayerNorm(self.fc2_dims)
+		self.bn2 = nn.LayerNorm(fc2_dims)
 
-		self.action_value =nn.Linear(self.n_actions, fc2_dims)
+		self.action_value = nn.Linear(self.n_actions, fc2_dims)
 		f3 = 0.003
-		self.q = nn.Linear(self.fc2_dims, 1)
+		self.q = nn.Linear(fc2_dims, 1)
 		T.nn.init.uniform_(self.q.weight.data, -f3, f3)
 		T.nn.init.uniform_(self.q.bias.data, -f3, f3)
 
-		self.optimizer = optim.Admin(self.parameters(), lr = beta)
+		self.optimizer = optim.Adam(self.parameters(), lr = beta)
 		self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
 
 		self.to(self.device)
@@ -93,14 +93,15 @@ class CriticNetwork(nn.Module):
 		state_value = self.fc2(state_value)
 		state_value = self.bn2(state_value)
 
-		action_value = self.action_value(action)
+		action_value = self.action_value(actions)
 		state_action_value = F.relu(T.add(state_value, action_value))
+		state_action_value = self.q(state_action_value)
 
 		return state_action_value
 
 	def save_checkpoint(self):
 		print("Saving checkpoint")
-		T.save(self.sate_dict(), self.checkpoint_file)
+		T.save(self.state_dict(), self.checkpoint_file)
 
 	def load_checkpoin(self):
 		print("Laoding checkpoint")
@@ -108,33 +109,32 @@ class CriticNetwork(nn.Module):
 
 
 class ActorNetwork(nn.Module):
-	def __init__(self, alpha, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir = "tmp/dir"):
+	def __init__(self, alpha, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir = "CheckPoint"):
 		super(ActorNetwork, self).__init__()
 		self.input_dims = input_dims
 		self.n_actions = n_actions
-		self.checkpoint_file = os.path.join(chkpt_dir, name +"_ddpg")
+		self.checkpoint_file = os.path.join(os.getcwd(), chkpt_dir, name +"_ddpg")
 
 		self.fc1 = nn.Linear(*self.input_dims , fc1_dims)
 		f1 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
 		T.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
 		T.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
 
-		self.bn1 = nn.LayerNorm(self.fc1_dims)
+		self.bn1 = nn.LayerNorm(fc1_dims)
 
 		self.fc2 = nn.Linear(fc1_dims, fc2_dims)
-		f2 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
+		f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
 		T.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
 		T.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
 
-		self.bn2 = nn.LayerNorm(self.fc2_dims)
+		self.bn2 = nn.LayerNorm(fc2_dims)
 
 		f3 = 0.003
 		self.mu = nn.Linear(fc2_dims, self.n_actions)
-		f3 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
 		T.nn.init.uniform_(self.mu.weight.data, -f3, f3)
 		T.nn.init.uniform_(self.mu.bias.data, -f3, f3)
 
-		self.optimizer = optim.Admin(self.parameters(), lr = beta)
+		self.optimizer = optim.Adam(self.parameters(), lr = alpha)
 		self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
 
 		self.to(self.device)
@@ -154,7 +154,7 @@ class ActorNetwork(nn.Module):
 
 	def save_checkpoint(self):
 		print("Saving checkpoint")
-		T.save(self.sate_dict(), self.checkpoint_file)
+		T.save(self.state_dict(), self.checkpoint_file)
 
 	def load_checkpoin(self):
 		print("Laoding checkpoint")
@@ -181,8 +181,8 @@ class Agent():
 		self.actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "Actor")
 		self.target_actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "TargetActor")
 
-		self.crititc = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "Critic")
-		self.target_crititc = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "TargetCritic")
+		self.critic = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "Critic")
+		self.target_critic = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions = n_actions, name = "TargetCritic")
 
 		self.noise = OUActionNoise(mu = np.zeros(n_actions))
 
@@ -192,7 +192,7 @@ class Agent():
 		self.actor.eval()
 		observation = T.tensor(observation, dtype=T.float).to(self.actor.device)
 		mu = self.actor(observation).to(self.actor.device)
-		mu_prime = mu + T.tensor(self.noise(), dtype.T.float).to(self.actor.device)
+		mu_prime = mu + T.tensor(self.noise(), dtype = T.float).to(self.actor.device)
 
 		self.actor.train()
 
@@ -204,40 +204,40 @@ class Agent():
 	def learn(self):
 		if self.memory.memory_counter < self.batch_size:
 			return
-		state, action, reward, new_state, done = self.memory.sample_buffer(self.batch_size)
+		state, action, reward, done, new_state = self.memory.sample_buffer(self.batch_size)
 
-		state = T.tensor(state, dtype=T.float).to(self.crititc.device)
-		action = T.tensor(action, dtype=T.float).to(self.crititc.device)
-		new_state = T.tensor(new_state, dtype=T.float).to(self.crititc.device)
-		reward = T.tensor(reward, dtype=T.float).to(self.crititc.device)
-		done = T.tensor(done, dtype=T.float).to(self.crititc.device)
+		state = T.tensor(state, dtype=T.float).to(self.critic.device)
+		action = T.tensor(action, dtype=T.float).to(self.critic.device)
+		new_state = T.tensor(new_state, dtype=T.float).to(self.critic.device)
+		reward = T.tensor(reward, dtype=T.float).to(self.critic.device)
+		done = T.tensor(done, dtype=T.float).to(self.critic.device)
 
 		self.target_actor.eval()
-		self.target_crititc.eval()
-		self.crititc.eval()
+		self.target_critic.eval()
+		self.critic.eval()
 
 		target_action = self.target_actor.forward(new_state)
-		critic_value_ = self.target_crititc.forward(new_state, target_action)
-		critic_value = self.crititc.forward(state, action)
+		critic_value_ = self.target_critic.forward(new_state, target_action)
+		critic_value = self.critic.forward(state, action)
 
 		target = []
 		for j in range(self.batch_size):
 			target.append(reward[j] + self.gamma * critic_value_[j] * done[j])
 
-		target = T.tensor(target, dtype=T.float).to(self.crititc.device)
+		target = T.tensor(target).to(self.critic.device)
 		target = target.view(self.batch_size, 1)
-
-		self.crititc.train()
-		self.crititc.optimizer.zero_grad()
+		
+		self.critic.train()
+		self.critic.optimizer.zero_grad()
 
 		critic_loss = F.mse_loss(target, critic_value)
-		critit_loss.backward()
+		critic_loss.backward()
 		self.critic.optimizer.step()
 
 		self.critic.eval()
 		self.actor.optimizer.zero_grad()
 
-		mu = self.actor.forward
+		mu = self.actor.forward(state)
 		self.actor.train()
 		actor_loss = -self.critic.forward(state, mu)
 		actor_loss = T.mean(actor_loss)
@@ -258,15 +258,15 @@ class Agent():
 
 		critic_state_dict = dict(critic_params)
 		actor_state_dict = dict(actor_params)
-		target_critic_state_dict = dict(critic_params)
+		target_critic_state_dict = dict(target_critic)
 		target_actor_state_dict = dict(target_actor)
 
 		for name in critic_state_dict:
-			critic_state_dict[name] = tau * critic_state_dict[name].clone() + (1-tau) ( target_critic_state_dict[name].clone())
+			critic_state_dict[name] = tau * critic_state_dict[name].clone() + (1-tau) * (target_critic_state_dict[name].clone())
 		self.target_critic.load_state_dict(critic_state_dict)
 
 		for name in actor_state_dict:
-			actor_state_dict[name] = tau * actor_state_dict[name].clone() + (1-tau) ( target_actor_state_dict[name].clone())
+			actor_state_dict[name] = tau * actor_state_dict[name].clone() + (1-tau) * (target_actor_state_dict[name].clone())
 		self.target_actor.load_state_dict(actor_state_dict)
 
 	def save_models(self):
